@@ -3,6 +3,7 @@ from excel_utils import read_excel_columns
 from mssql_utils import get_mssql_table_columns
 from mapping_utils import generate_insert_scripts
 import os
+import pyodbc
 
 # Global state
 state = {
@@ -33,6 +34,9 @@ NODE_ATTR_HEIGHT = 30  # Height for easier clicking
 
 # Store the last right-clicked link
 last_right_clicked_link = {'link_id': None}
+
+WINDOW_WIDTH = 1100
+WINDOW_HEIGHT = 900
 
 def log_message(message, level='info'):
     msg = f"[{level.upper()}] {message}\n"
@@ -67,12 +71,18 @@ def connect_mssql_callback(sender, app_data, user_data):
         return
     server = dpg.get_value('server')
     database = dpg.get_value('database')
-    username = dpg.get_value('username')
-    password = dpg.get_value('password')
     table = dpg.get_value('table')
+    # Use Windows Authentication (Trusted_Connection=yes)
     try:
-        columns = get_mssql_table_columns(server, database, username, password, table)
-        state['mssql_info'] = {'server': server, 'database': database, 'username': username, 'password': password, 'table': table}
+        conn_str = (
+            f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+            f"SERVER={server};DATABASE={database};Trusted_Connection=yes;"
+        )
+        with pyodbc.connect(conn_str) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT TOP 0 * FROM {table}")
+            columns = [column[0] for column in cursor.description]
+        state['mssql_info'] = {'server': server, 'database': database, 'table': table}
         state['table_columns'] = columns
         log_message(f'Loaded table columns: {columns}', 'info')
         state['mapping'].clear()
@@ -189,7 +199,8 @@ def clear_all_mappings():
 
 def main():
     dpg.create_context()
-    with dpg.window(label='Excel to SQL Mapper', width=1100, height=900):
+    dpg.create_viewport(title='Excel to SQL Mapper', width=WINDOW_WIDTH, height=WINDOW_HEIGHT)
+    with dpg.window(label='Excel to SQL Mapper', width=WINDOW_WIDTH, height=WINDOW_HEIGHT, no_resize=True, no_move=True):
         dpg.add_text('Step 1: Import Excel File')
         dpg.add_input_text(tag='excel_file_path', label='Excel File Path', width=400)
         dpg.add_button(label='Import Excel', callback=import_excel_callback)
@@ -199,15 +210,13 @@ def main():
         dpg.add_input_text(label='Mock Table Columns (comma-separated)', tag='mock_columns', width=400, default_value='id, name, age')
         dpg.add_input_text(tag='server', label='Server')
         dpg.add_input_text(tag='database', label='Database')
-        dpg.add_input_text(tag='username', label='Username')
-        dpg.add_input_text(tag='password', label='Password', password=True)
         dpg.add_input_text(tag='table', label='Table')
         dpg.add_button(label='Connect to MSSQL', callback=connect_mssql_callback)
         dpg.add_spacer(height=10)
         dpg.add_text('Step 3: Map Columns')
         dpg.add_button(label='Auto Map Matching Columns', callback=lambda s,a,u: auto_map_matching_columns())
         dpg.add_button(label='Clear All Mappings', callback=lambda s,a,u: clear_all_mappings())
-        dpg.add_node_editor(tag='node_editor', width=800, height=500, callback=on_link_created, delink_callback=on_link_deleted)
+        dpg.add_node_editor(tag='node_editor', width=800, height=500, callback=on_link_created, delink_callback=on_link_deleted, minimap=True, minimap_location=1)
         dpg.add_text('Current Mappings:')
         dpg.add_input_text(tag='mappings_display', default_value='', readonly=True, width=400)
         dpg.add_spacer(height=10)
@@ -220,7 +229,6 @@ def main():
         # Context menu for deleting a link (if supported)
         with dpg.window(label="Delete Link", tag="delete_link_menu", show=False, no_title_bar=True, no_move=True, no_resize=True, no_close=True, no_background=True):
             dpg.add_button(label="Delete Link", callback=lambda s,a,u: delete_selected_link())
-    dpg.create_viewport(title='Excel to SQL Mapper', width=1120, height=1000)
     dpg.setup_dearpygui()
     dpg.show_viewport()
     dpg.start_dearpygui()
